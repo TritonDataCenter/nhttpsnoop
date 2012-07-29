@@ -81,6 +81,16 @@ Finally, you can select only individual processes with -p.  See below for detail
 
 ## Usage notes
 
+"-p" is the only way to select processes, but you can use this with pgrep(1)
+for more sophisticated selections:
+
+    # nhttpsnoop -p "$(pgrep -f restify)"  # select only "restify" processes
+    # nhttpsnoop -p "$(pgrep -z myzone)"   # select processes in zone "myzone"
+    # nhttpsnoop -p "$(pgrep -u dap)"      # select processes with user "dap"
+    
+With "-p", all Node processes are actually traced, but only requests from the
+selected processes are printed.
+
 This tool uses the Node.js DTrace provider and dtrace(1M).  You must have
 permissions to run dtrace(1M) and use this provider.  It works on illumos-based
 systems, and OS X should work once [Node issue

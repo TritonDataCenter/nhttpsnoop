@@ -79,7 +79,7 @@ Finally, you can select only individual processes with -p.  See below for detail
 
     -p pid,...    Only trace the specified processes.
 
-## Usage notes
+## Selecting processes
 
 "-p" is the only way to select processes, but you can use this with pgrep(1)
 for more sophisticated selections:
@@ -90,6 +90,8 @@ for more sophisticated selections:
     
 With "-p", all Node processes are actually traced, but only requests from the
 selected processes are printed.
+
+## DTrace
 
 This tool uses the Node.js DTrace provider and dtrace(1M).  You must have
 permissions to run dtrace(1M) and use this provider.  It works on illumos-based

@@ -2,7 +2,7 @@
 
 Synopsis:
 
-    usage: nhttpsnoop [-l] [-o col,...] [-p pid,...]
+    usage: nhttpsnoop [-ln] [-o col,...] [-p pid,...]
 
 nhttpsnoop traces Node.js HTTP server activity.  By default, all requests from
 all Node.js servers on the system are traced, and each one is displayed as it
@@ -47,6 +47,9 @@ Finally, you can select only individual processes with -p.  See below for detail
                   may not be adjacent, since multiple requests may be received
                   before any responses are sent if the request handling is
                   asynchronous.
+
+    -n            Don't actually run DTrace, but instead just print out the D
+                  script that would be used.
 
     -o col,...    Display the specified columns instead of the default output.
                   Available columns include:
@@ -114,3 +117,10 @@ where `$PREFIX` is where you've installed Node (e.g., "/usr/local" or
 "/opt/local").  nhttpsnoop passes DTRACE\_OPTS to "dtrace", which in this case
 causes "dtrace" to look for the node.d translator file in the directory
 specified by -L.  See the "-L" option in dtrace(1M) for details.
+
+On older versions of illumos, you may see errors like this:
+
+    # dtrace: error on enabled probe ID 34 (ID 67807: node6112:node:_ZN4node26DTRACE_HTTP_SERVER_REQUESTERKN2v89ArgumentsE:http-server-request): invalid kernel access in action #2 at DIF offset 348
+
+This has been fixed in versions of SmartOS after 20120531T220306Z.  See "uname
+-v" to see what release you're running.

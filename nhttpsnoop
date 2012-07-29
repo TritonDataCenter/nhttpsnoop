@@ -21,6 +21,9 @@ Options:
                   before any responses are sent if the request handling is
                   asynchronous.
 
+    -n            Don't actually run DTrace, but instead just print out the D
+                  script that would be used.
+
     -o col,...    Display the specified columns instead of the default output.
                   Available columns include:
 

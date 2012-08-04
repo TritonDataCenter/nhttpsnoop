@@ -27,17 +27,9 @@ Options:
     -o col,...    Display the specified columns instead of the default output.
                   Available columns include:
 
-                fd      file descriptor for the client socket.  With -l, this
-                        can be used to correlate request and response events,
-                        but this value will be reused between requests.  This
-                        value is unreliable for Node 0.6 and early versions of
-                        0.8.
-        
                 latency time in microseconds between the request being received
                         and the response being sent.  With -l, this field is
                         blank for the line denoting the start of the request.
-                        NOTE: this value is unreliable when "fd" is unreliable.
-                        See above.
         
                 method  Request's HTTP method
         
@@ -213,7 +205,7 @@ function emit_row
 				args="$args \"-\""
 			else
 				fmts="$fmts %4d.%-03dms"
-				lat="(timestamp-rqstarts[$conn->fd])"
+				lat="(timestamp-rqstarts[$conn->remoteAddress,$conn->remotePort])"
 				args="$args $lat/MICROSEC"
 				args="$args ($lat%MICROSEC)/1000"
 			fi
@@ -293,7 +285,7 @@ done
 # Configure default columns.
 if [[ -z "$nhs_cols" ]]; then
 	if [[ $nhs_tracestart = "true" ]]; then
-		nhs_cols="time pid which fd latency method path"
+		nhs_cols="time pid which latency method path"
 	else
 		nhs_cols="time pid latency method path"
 	fi
@@ -343,18 +335,20 @@ echo "{" >> $nhs_tmpfile
 	    "args[0]->method" "args[0]->url" >> $nhs_tmpfile
 
 cat >> $nhs_tmpfile <<EOF
-	rqstarts[args[1]->fd] = timestamp;
-	rqmethods[args[1]->fd] = args[0]->method;
-	rqurls[args[1]->fd] = args[0]->url;
+	rqstarts[args[1]->remoteAddress, args[1]->remotePort] = timestamp;
+	rqmethods[args[1]->remoteAddress, args[1]->remotePort] = args[0]->method;
+	rqurls[args[1]->remoteAddress, args[1]->remotePort] = args[0]->url;
 }
 
 node*:::http-server-response
-/rqstarts[args[0]->fd]/
+/rqstarts[args[0]->remoteAddress, args[0]->remotePort]/
 {
-$(emit_row "response" "args[0]" "rqmethods[args[0]->fd]" "rqurls[args[0]->fd]")
-	rqstarts[args[0]->fd] = 0;
-	rqmethods[args[0]->fd] = 0;
-	rqurls[args[0]->fd] = 0;
+$(emit_row "response" 'args[0]' \
+    'rqmethods[args[0]->remoteAddress,args[0]->remotePort]' \
+    'rqurls[args[0]->remoteAddress,args[0]->remotePort]')
+	rqstarts[args[0]->remoteAddress, args[0]->remotePort] = 0;
+	rqmethods[args[0]->remoteAddress, args[0]->remotePort] = 0;
+	rqurls[args[0]->remoteAddress, args[0]->remotePort] = 0;
 }
 EOF
 

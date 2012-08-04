@@ -18,13 +18,13 @@ With -l, a record is emitted when requests are received as well in addition to
 when the response is sent:
 
     # nhttpsnoop -l
-    TIME            PID      FD    LATENCY METHOD PATH                
-    [  6.807218]  10110 ->    0          - GET    /wf_runners/869de259-5bdf-4efe
-    [  6.869112]  10110 <-    0    2.061ms GET    /wf_runners/869de259-5bdf-4efe
-    [  6.888441]  10110 ->    0          - GET    /search/wf_jobs
-    [  6.899112]  10110 <-    0    1.386ms GET    /search/wf_jobs
-    [  6.808441]  37476 ->    0          - HEAD   /agentprobes
-    [  6.869112]  37476 <-    0    3.036ms HEAD   /agentprobes
+    TIME            PID       LATENCY METHOD PATH                
+    [  6.807218]  10110 ->          - GET    /wf_runners/869de259-5bdf-4efe
+    [  6.869112]  10110 <-    2.061ms GET    /wf_runners/869de259-5bdf-4efe
+    [  6.888441]  10110 ->          - GET    /search/wf_jobs
+    [  6.899112]  10110 <-    1.386ms GET    /search/wf_jobs
+    [  6.808441]  37476 ->          - HEAD   /agentprobes
+    [  6.869112]  37476 <-    3.036ms HEAD   /agentprobes
 
 You can also select individual fields for display with -o, much like ps(1) and
 other tools:
@@ -54,17 +54,9 @@ Finally, you can select only individual processes with -p.  See below for detail
     -o col,...    Display the specified columns instead of the default output.
                   Available columns include:
 
-                fd      file descriptor for the client socket.  With -l, this
-                        can be used to correlate request and response events,
-                        but this value will be reused between requests.  This
-                        value is unreliable for Node 0.6 and early versions of
-                        0.8.
-
                 latency time in microseconds between the request being received
                         and the response being sent.  With -l, this field is
                         blank for the line denoting the start of the request.
-                        NOTE: this value is unreliable when "fd" is unreliable.
-                        See above.
 
                 method  Request's HTTP method
 

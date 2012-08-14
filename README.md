@@ -74,6 +74,15 @@ Finally, you can select only individual processes with -p.  See below for detail
 
     -p pid,...    Only trace the specified processes.
 
+    -t ARGTYPE    Specify which probe arguments to use, which must be one of
+                  "translated" or "simple".  Translated arguments are more
+                  extensible, more efficient, and the only reliable approach on
+                  systems that support them.  Untranslated arguments are
+                  required on OS X, which doesn't support USDT translators.
+                  The default value is selected based on your system and you
+                  should never need to override this.
+
+
 ## Selecting processes
 
 "-p" is the only way to select processes, but you can use this with pgrep(1)
@@ -90,8 +99,8 @@ selected processes are printed.
 
 This tool uses the Node.js DTrace provider and dtrace(1M).  You must have
 permissions to run dtrace(1M) and use this provider.  It works on illumos-based
-systems, and OS X should work once [Node issue
-3617](https://github.com/joyent/node/issues/3617) is resolved.
+systems and OS X systems for builds of Node with [Node issue
+3617](https://github.com/joyent/node/issues/3617) resolved.
 
 If you see an error like the following:
 

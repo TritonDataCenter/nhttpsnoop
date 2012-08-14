@@ -7,7 +7,7 @@
 function usage
 {
         cat >&2 << USAGE
-usage: $nhs_arg0 [-l] [-o col,...] [-p pid,...]
+usage: $nhs_arg0 [-lnt] [-o col,...] [-p pid,...]
 
 Trace Node.js HTTP server activity.  By default, all requests from all Node.js
 servers on the system are traced, and each one is displayed as it completes.
@@ -46,6 +46,14 @@ Options:
                 url     Request's full HTTP URL, including query parameters
         
     -p pid,...    Only trace the specified processes.
+
+    -t ARGTYPE    Specify which probe arguments to use, which must be one of
+                  "translated" or "simple".  Translated arguments are more
+                  extensible, more efficient, and the only reliable approach on
+                  systems that support them.  Untranslated arguments are
+                  required on OS X, which doesn't support USDT translators.
+                  The default value is selected based on your system and you
+                  should never need to override this.
 
 This tool uses the Node.js DTrace provider and dtrace(1M).  You must have
 appropriate permissions to run it.
@@ -187,7 +195,7 @@ function emit_header
 #
 function emit_row
 {
-	local which=$1 conn=$2 method=$3 uri=$4
+	local which=$1 fd=$2 raddr=$3 rport=$4 method=$5 uri=$6
 	local fmts=
 	local args=
 	local lat=
@@ -196,7 +204,7 @@ function emit_row
 		case $column in
 		fd)
 			fmts="$fmts %4d"
-			args="$args $conn->fd"
+			args="$args $fd"
 			;;
 
 		latency)
@@ -205,7 +213,7 @@ function emit_row
 				args="$args \"-\""
 			else
 				fmts="$fmts %4d.%-03dms"
-				lat="(timestamp-rqstarts[$conn->remoteAddress,$conn->remotePort])"
+				lat="(timestamp-rqstarts[$raddr,$rport])"
 				args="$args $lat/MICROSEC"
 				args="$args ($lat%MICROSEC)/1000"
 			fi
@@ -228,12 +236,12 @@ function emit_row
 
 		raddr)
 			fmts="$fmts %-16s"
-			args="$args $conn->remoteAddress"
+			args="$args $raddr"
 			;;
 
 		rport)
 			fmts="$fmts %5d"
-			args="$args $conn->remotePort"
+			args="$args $rport"
 			;;
 
 		time)
@@ -271,13 +279,26 @@ nhs_pids=				# selected pids (-p)
 nhs_cols=				# selected columns (-o)
 nhs_dryrun="false"			# just print script and exit (-n)
 nhs_tracestart="false"			# print "request" events (-l)
+nhs_argtype="translated"		# use translated args (see below)
 
-while getopts "lno:p:" c; do
+#
+# OS X does not support translated arguments with USDT, so we default to using
+# the untranslated versions.  We don't do this on other systems (e.g., illumos,
+# BSD) because the untranslated arguments are not present in older versions of
+# the provider there and because the untranslated arguments are more limited if
+# we ever extend the translated ones.  (The untranslated versions are always
+# available on OS X because the provider wasn't supported there before they were
+# added.)  This behavior can be overridden using the "-t" option.
+#
+[[ $(uname -s) = "Darwin" ]] && nhs_argtype="simple"
+
+while getopts "lno:p:t:" c; do
 	case $c in
 	l)	nhs_tracestart="true"		;;
 	n)	nhs_dryrun="true"		;;
 	o)	nhs_cols=$(optsplit $OPTARG)	;;
 	p)	nhs_pids=$(optsplit $OPTARG)	;;
+	t)	nhs_argtype="$OPTARG"		;;
 	*)	usage
 	esac
 done
@@ -289,6 +310,37 @@ if [[ -z "$nhs_cols" ]]; then
 	else
 		nhs_cols="time pid latency method path"
 	fi
+fi
+
+#
+# For readability, we define bash variables to contain the D expressions used
+# for the various pieces of information we need.  The expression depends on the
+# nhs_argtype (-t) option as well as which probe we're looking at ("request" or
+# "response").
+#
+if [[ $nhs_argtype = "translated" ]]; then
+	rqarg_fd="args[1]->fd"
+	rqarg_raddr="args[1]->remoteAddress"
+	rqarg_rport="args[1]->remotePort"
+	rqarg_method="args[0]->method"
+	rqarg_url="args[0]->url"
+
+	rsarg_fd="args[0]->fd"
+	rsarg_raddr="args[0]->remoteAddress"
+	rsarg_rport="args[0]->remotePort"
+elif [[ $nhs_argtype = "simple" ]]; then
+	rqarg_fd="\"-\""
+	rqarg_raddr="copyinstr(arg2)"
+	rqarg_rport="arg3"
+	rqarg_method="copyinstr(arg4)"
+	rqarg_url="copyinstr(arg5)"
+
+	rsarg_fd="\"-\""
+	rsarg_raddr="copyinstr(arg1)"
+	rsarg_rport="arg2"
+else
+	echo "$nhs_arg0: invalid value for \"-t\" option: \"$nhs_argtype\""
+	usage 
 fi
 
 cat > $nhs_tmpfile <<EOF
@@ -331,25 +383,25 @@ fi
 echo "{" >> $nhs_tmpfile
 
 [[ $nhs_tracestart = "true" ]] && 
-	emit_row "request" "args[1]" \
-	    "args[0]->method" "args[0]->url" >> $nhs_tmpfile
+	emit_row "request" $rqarg_fd $rqarg_raddr $rqarg_rport $rqarg_method \
+	    $rqarg_url  >> $nhs_tmpfile
 
 cat >> $nhs_tmpfile <<EOF
-	rqstarts[args[1]->remoteAddress, args[1]->remotePort] = timestamp;
-	rqmethods[args[1]->remoteAddress, args[1]->remotePort] = args[0]->method;
-	rqurls[args[1]->remoteAddress, args[1]->remotePort] = args[0]->url;
+	rqstarts[$rqarg_raddr, $rqarg_rport] = timestamp;
+	rqmethods[$rqarg_raddr, $rqarg_rport] = $rqarg_method;
+	rqurls[$rqarg_raddr, $rqarg_rport] = $rqarg_url;
 }
 
 node*:::http-server-response
-/rqstarts[args[0]->remoteAddress, args[0]->remotePort]/
+/rqstarts[$rsarg_raddr, $rsarg_rport]/
 {
-$(emit_row "response" 'args[0]' \
-    'rqmethods[args[0]->remoteAddress,args[0]->remotePort]' \
-    'rqurls[args[0]->remoteAddress,args[0]->remotePort]')
-	rqstarts[args[0]->remoteAddress, args[0]->remotePort] = 0;
-	rqmethods[args[0]->remoteAddress, args[0]->remotePort] = 0;
-	rqurls[args[0]->remoteAddress, args[0]->remotePort] = 0;
+$(emit_row "response" $rsarg_fd $rsarg_raddr $rsarg_rport	\
+    "rqmethods[$rsarg_raddr,$rsarg_rport]" "rqurls[$rsarg_raddr,$rsarg_rport]")
+	rqstarts[$rsarg_raddr, $rsarg_rport] = 0;
+	rqmethods[$rsarg_raddr, $rsarg_rport] = 0;
+	rqurls[$rsarg_raddr, $rsarg_rport] = 0;
 }
+
 EOF
 
 if [[ $nhs_dryrun = "true" ]]; then

@@ -7,19 +7,38 @@
 function usage
 {
         cat >&2 << USAGE
-usage: $nhs_arg0 [-lnt] [-o col,...] [-p pid,...]
+usage: $nhs_arg0 [-cglns] [-t argtype] [-o col,...] [-p pid,...]
 
-Trace Node.js HTTP server activity.  By default, all requests from all Node.js
-servers on the system are traced, and each one is displayed as it completes.
+    Trace Node.js HTTP client, server, and garbage collection activity.  By
+    default, all requests for all Node.js HTTP servers on the system are traced,
+    and information about each one is displayed as it completes.  You can also
+    specify:
 
-Options:
+    -c            Trace HTTP client activity (request/response pairs).
+                  See "Notes" below.
 
-    -l            Display two lines for each request: one when the request is
-                  received, and one when the response is sent (instead of just
-                  one line when the response is sent).  Note that these lines
-                  may not be adjacent, since multiple requests may be received
-                  before any responses are sent if the request handling is
-                  asynchronous.
+    -g            Trace garbage collections.
+
+    -s            Trace HTTP server activity (request/response pairs).
+
+    With none of these options, "-s" is assumed.  For examples:
+
+        # $nhs_arg0             # trace HTTP server activity only
+        # $nhs_arg0 -c          # trace HTTP client activity only
+        # $nhs_arg0 -cs         # trace HTTP client and server activity
+        # $nhs_arg0 -g          # trace garbage collections only
+        # $nhs_arg0 -cgs        # trace HTTP client and server activity and GCs
+
+Other options:
+
+    -l            Display two lines, one each for the beginning and end of each
+                  HTTP request.  For server requests, these correspond with
+                  receiving the request and sending the response.  For client
+                  requests, these correspond with sending the request and
+                  receiving the response.
+
+                  This is useful when you want to see how operations are
+                  actually interleaved instead of just how long each one takes.
 
     -n            Don't actually run DTrace, but instead just print out the D
                   script that would be used.
@@ -27,24 +46,33 @@ Options:
     -o col,...    Display the specified columns instead of the default output.
                   Available columns include:
 
-                latency time in microseconds between the request being received
-                        and the response being sent.  With -l, this field is
-                        blank for the line denoting the start of the request.
+                latency         time in microseconds between the request being
+                                received and the response being sent.
         
-                method  Request's HTTP method
+                method          Request's HTTP method
         
-                path    Request's HTTP URL path (excludes query parameters)
+                path            Request's HTTP URL path
+                                (excludes query parameters)
         
-                pid     process identifier
+                pid             process identifier
         
-                raddr   Client's IPv4 address
+                probe           indicates the type of event
+                                ("client", "server", or "gc")
         
-                rport   Client's TCP port
+                raddr           Remote host's IPv4 address
         
-                time    relative time of the event from when $nhs_arg0 started
+                rport           Remote host's TCP port
         
-                url     Request's full HTTP URL, including query parameters
-        
+                time            relative time of the event from when $nhs_arg0
+                                started
+
+                url             Request's full HTTP URL, including query parameters
+
+                which           Indicates with an arrow whether this is an
+                                incoming or outgoing request.
+
+                  Some fields may not apply to all events.
+
     -p pid,...    Only trace the specified processes.
 
     -t ARGTYPE    Specify which probe arguments to use, which must be one of
@@ -55,8 +83,16 @@ Options:
                   The default value is selected based on your system and you
                   should never need to override this.
 
-This tool uses the Node.js DTrace provider and dtrace(1M).  You must have
-appropriate permissions to run it.
+Notes
+
+    This tool uses the Node.js DTrace provider and dtrace(1M).  You must have
+    appropriate permissions to run it.
+
+    Data for HTTP client requests is not reliable when multiple requests are
+    issued concurrently for the same remote server.  Unfortunately, there's no
+    way to reliably associate request and response pairs in this case.  As a
+    result, some records may be missing from the output, and others may have
+    incorrect time and latency information.
 USAGE
 	exit 2
 }
@@ -154,6 +190,11 @@ function emit_header
 			args="$args \"PID\""
 			;;
 
+		probe)
+			fmts="$fmts %-6s"
+			args="$args \"PROBE\""
+			;;
+
 		raddr)
 			fmts="$fmts %-16s"
 			args="$args \"RADDR\""
@@ -191,7 +232,7 @@ function emit_header
 # Emit the body of a DTrace clause that will print out the fields requested by
 # the user.  Because the http-server-request and http-server-response probes
 # access their arguments differently, the caller specifies how to access the
-# connection object and the method and URI in the current context.
+# connection arguments, the method, and the URI in the current context.
 #
 function emit_row
 {
@@ -203,17 +244,28 @@ function emit_row
 	for column in $nhs_cols; do
 		case $column in
 		fd)
-			fmts="$fmts %4d"
-			args="$args $fd"
+			if [[ $which != "gc" ]]; then
+				fmts="$fmts %4d"
+				args="$args $fd"
+			else
+				fmts="$fmts %4s"
+				args="$args \"-\""
+			fi
 			;;
 
 		latency)
 			if [[ $which = "request" ]]; then
 				fmts="$fmts %10s"
 				args="$args \"-\""
-			else
+			else 
+				if [[ $which = "response" ]]; then
+					lat="(timestamp-"
+					lat="${lat}rqstarts[pid,$raddr,$rport])"
+				else
+					lat="(timestamp-self->gc_start)"
+				fi
+
 				fmts="$fmts %4d.%-03dms"
-				lat="(timestamp-rqstarts[$raddr,$rport])"
 				args="$args $lat/MICROSEC"
 				args="$args ($lat%MICROSEC)/1000"
 			fi
@@ -234,6 +286,16 @@ function emit_row
 			args="$args pid"
 			;;
 
+		probe)
+			fmts="$fmts %-6s"
+			if [[ $which != "gc" ]]; then
+				args="$args strtok(probename+sizeof("
+				args="${args}\"http-\")-1,\"-\")"
+			else
+				args="$args \"gc\""
+			fi
+			;;
+
 		raddr)
 			fmts="$fmts %-16s"
 			args="$args $raddr"
@@ -247,7 +309,7 @@ function emit_row
 		time)
 			fmts="$fmts [%3d.%06d]"
 			args="$args (timestamp-start)/NANOSEC"
-			args="$args (timestamp-start)%MICROSEC"
+			args="$args (timestamp-start)%NANOSEC/1000"
 			;;
 
 		url)
@@ -280,6 +342,9 @@ nhs_cols=				# selected columns (-o)
 nhs_dryrun="false"			# just print script and exit (-n)
 nhs_tracestart="false"			# print "request" events (-l)
 nhs_argtype="translated"		# use translated args (see below)
+nhs_doclient="false"			# trace client activity
+nhs_dogc="false"			# trace GC activity
+nhs_doserver=				# trace server activity
 
 #
 # OS X does not support translated arguments with USDT, so we default to using
@@ -292,23 +357,44 @@ nhs_argtype="translated"		# use translated args (see below)
 #
 [[ $(uname -s) = "Darwin" ]] && nhs_argtype="simple"
 
-while getopts "lno:p:t:" c; do
+while getopts "cglno:p:t:s" c; do
 	case $c in
+	c)	nhs_doclient="true"		;;
+	g)	nhs_dogc="true"			;;
 	l)	nhs_tracestart="true"		;;
 	n)	nhs_dryrun="true"		;;
 	o)	nhs_cols=$(optsplit $OPTARG)	;;
 	p)	nhs_pids=$(optsplit $OPTARG)	;;
+	s)	nhs_doserver="true"		;;
 	t)	nhs_argtype="$OPTARG"		;;
 	*)	usage
 	esac
 done
 
+if [[ $nhs_doclient = "true" || $nhs_dogc = "true" ]]; then
+	[[ -z "$nhs_doserver" ]] && nhs_doserver="false"
+else
+	nhs_doserver="true"
+fi
+
+nhs_rqprobes=
+nhs_rsprobes=
+if [[ "$nhs_doserver" = "true" ]]; then
+	nhs_rqprobes="$nhs_rqprobes node*:::http-server-request"
+	nhs_rsprobes="$nhs_rsprobes node*:::http-server-response"
+fi
+
+if [[ "$nhs_doclient" = "true" ]]; then
+	nhs_rqprobes="$nhs_rqprobes node*:::http-client-request"
+	nhs_rsprobes="$nhs_rsprobes node*:::http-client-response"
+fi
+
 # Configure default columns.
 if [[ -z "$nhs_cols" ]]; then
 	if [[ $nhs_tracestart = "true" ]]; then
-		nhs_cols="time pid which latency method path"
+		nhs_cols="time pid probe which latency method path"
 	else
-		nhs_cols="time pid latency method path"
+		nhs_cols="time pid probe latency method path"
 	fi
 fi
 
@@ -329,19 +415,20 @@ if [[ $nhs_argtype = "translated" ]]; then
 	rsarg_raddr="args[0]->remoteAddress"
 	rsarg_rport="args[0]->remotePort"
 elif [[ $nhs_argtype = "simple" ]]; then
-	rqarg_fd="\"-\""
+	rqarg_fd="-1"
 	rqarg_raddr="copyinstr(arg2)"
 	rqarg_rport="arg3"
 	rqarg_method="copyinstr(arg4)"
 	rqarg_url="copyinstr(arg5)"
 
-	rsarg_fd="\"-\""
+	rsarg_fd="-1"
 	rsarg_raddr="copyinstr(arg1)"
 	rsarg_rport="arg2"
 else
 	echo "$nhs_arg0: invalid value for \"-t\" option: \"$nhs_argtype\""
 	usage 
 fi
+
 
 cat > $nhs_tmpfile <<EOF
 #!/usr/sbin/dtrace -Cs
@@ -358,51 +445,80 @@ $(emit_header)
 	start = timestamp;
 }
 
-node*:::http-server-request
 EOF
 
-#
-# We generate the DTrace script dynamically based on the options given.  If -p
-# was specified, we predicate our first probe on the given set of pids.
-#
-if [[ -n "$nhs_pids" ]]; then
-	set -- $nhs_pids
-
-	if [[ $# -eq 1 ]]; then
-		echo "/pid == $1/" >> $nhs_tmpfile
-	else
-		echo "/pid == $1" >> $nhs_tmpfile
-		shift
-		for pid in "$@"; do
-			echo " || pid == $pid" >> $nhs_tmpfile
-		done
-		echo "/" >> $nhs_tmpfile
+if [[ $nhs_doserver = "true" || $nhs_doclient = "true" ]]; then
+	join ",\n" $nhs_rqprobes >> $nhs_tmpfile
+	echo >> $nhs_tmpfile
+	
+	#
+	# We generate the DTrace script dynamically based on the options given.
+	# If -p was specified, we predicate our first probe on the given set of
+	# pids.
+	#
+	if [[ -n "$nhs_pids" ]]; then
+		set -- $nhs_pids
+	
+		if [[ $# -eq 1 ]]; then
+			echo "/pid == $1/" >> $nhs_tmpfile
+		else
+			echo "/pid == $1" >> $nhs_tmpfile
+			shift
+			for pid in "$@"; do
+				echo " || pid == $pid" >> $nhs_tmpfile
+			done
+			echo "/" >> $nhs_tmpfile
+		fi
 	fi
+	
+	echo "{" >> $nhs_tmpfile
+	
+	[[ $nhs_tracestart = "true" ]] && 
+		emit_row "request"	\
+		    $rqarg_fd		\
+		    $rqarg_raddr	\
+		    $rqarg_rport	\
+		    $rqarg_method	\
+		    $rqarg_url  	>> $nhs_tmpfile
+	
+	cat >> $nhs_tmpfile <<EOF
+	rqstarts[pid, $rqarg_raddr, $rqarg_rport] = timestamp;
+	rqmethods[pid, $rqarg_raddr, $rqarg_rport] = $rqarg_method;
+	rqurls[pid, $rqarg_raddr, $rqarg_rport] = $rqarg_url;
+}
+
+$(join ",\n" $nhs_rsprobes)
+/rqstarts[pid, $rsarg_raddr, $rsarg_rport]/
+{
+$(emit_row "response"				\
+    $rsarg_fd					\
+    $rsarg_raddr 				\
+    $rsarg_rport				\
+    "rqmethods[pid,$rsarg_raddr,$rsarg_rport]"	\
+    "rqurls[pid,$rsarg_raddr,$rsarg_rport]")
+
+	rqstarts[pid, $rsarg_raddr, $rsarg_rport] = 0;
+	rqmethods[pid, $rsarg_raddr, $rsarg_rport] = 0;
+	rqurls[pid, $rsarg_raddr, $rsarg_rport] = 0;
+}
+EOF
 fi
 
-echo "{" >> $nhs_tmpfile
-
-[[ $nhs_tracestart = "true" ]] && 
-	emit_row "request" $rqarg_fd $rqarg_raddr $rqarg_rport $rqarg_method \
-	    $rqarg_url  >> $nhs_tmpfile
-
-cat >> $nhs_tmpfile <<EOF
-	rqstarts[$rqarg_raddr, $rqarg_rport] = timestamp;
-	rqmethods[$rqarg_raddr, $rqarg_rport] = $rqarg_method;
-	rqurls[$rqarg_raddr, $rqarg_rport] = $rqarg_url;
-}
-
-node*:::http-server-response
-/rqstarts[$rsarg_raddr, $rsarg_rport]/
+if [[ $nhs_dogc = "true" ]]; then
+	cat >> $nhs_tmpfile <<EOF
+node*:::gc-start
 {
-$(emit_row "response" $rsarg_fd $rsarg_raddr $rsarg_rport	\
-    "rqmethods[$rsarg_raddr,$rsarg_rport]" "rqurls[$rsarg_raddr,$rsarg_rport]")
-	rqstarts[$rsarg_raddr, $rsarg_rport] = 0;
-	rqmethods[$rsarg_raddr, $rsarg_rport] = 0;
-	rqurls[$rsarg_raddr, $rsarg_rport] = 0;
+	self->gc_start = timestamp;
 }
 
+node*:::gc-done
+/self->gc_start/
+{
+$(emit_row "gc" -1 '"-"' 0 '"-"' '"-"')
+	self->gc_start = 0;
+}
 EOF
+fi
 
 if [[ $nhs_dryrun = "true" ]]; then
 	cat $nhs_tmpfile
@@ -411,7 +527,7 @@ if [[ $nhs_dryrun = "true" ]]; then
 fi
 
 chmod +x $nhs_tmpfile
-dtrace $DTRACE_OPTS -Cs $nhs_tmpfile || \
+dtrace $DTRACE_OPTS -Z -Cs $nhs_tmpfile || \
     echo "$nhs_arg0: failed to invoke dtrace(1M)" >&2
 rv=$?
 rm -f $nhs_tmpfile

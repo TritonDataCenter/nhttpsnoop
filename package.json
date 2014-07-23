@@ -1,0 +1,19 @@
+{
+  "name": "nhttpsnoop",
+  "version": "1.0.0",
+  "description": "Trace Node.js GC and HTTP server and client activity",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/davepacheco/nhttpsnoop"
+  },
+  "keywords": [ "node", "http", "dtrace", "trace", "gc" ],
+  "author": "Dave Pacheco <dap@cs.brown.edu>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/davepacheco/nhttpsnoop/issues"
+  },
+  "homepage": "https://github.com/davepacheco/nhttpsnoop",
+  "bin": {
+      "nhttpsnoop": "./nhttpsnoop"
+  }
+}
